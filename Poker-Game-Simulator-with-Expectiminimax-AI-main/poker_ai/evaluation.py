@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Literal
 
-import numpy as np
 import pandas as pd
 
 from .game_engine import PokerGame
 
 
-def run_simulation(num_hands: int = 200, max_depth: int = 2, num_samples: int = 64) -> pd.DataFrame:
+def run_simulation(
+    num_hands: int = 200,
+    max_depth: int = 2,
+    num_samples: int = 64,
+    mode: Literal["expectiminimax", "normal"] = "expectiminimax",
+) -> pd.DataFrame:
     """Run many automated games and collect metrics.
 
     Currently compares:
@@ -20,6 +23,10 @@ def run_simulation(num_hands: int = 200, max_depth: int = 2, num_samples: int = 
     game = PokerGame(num_players=2)
     game.ai.max_depth = max_depth
     game.ai.num_samples = num_samples
+    game.use_expectiminimax = mode == "expectiminimax"
+    if not game.use_expectiminimax:
+        # Seat 0 fallback uses existing baseline logic: check/call-first, fold otherwise.
+        game.strategies[0] = None
     results: List[Dict] = []
 
     initial_stacks = [p.stack for p in game.players]
@@ -36,6 +43,7 @@ def run_simulation(num_hands: int = 200, max_depth: int = 2, num_samples: int = 
         results.append(
             {
                 "hand": hand_idx,
+                "mode": mode,
                 "ai_delta": ai_delta,
                 "ai_stack": stacks_after[0],
                 "opp_stack": stacks_after[1],

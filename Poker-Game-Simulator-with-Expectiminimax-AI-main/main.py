@@ -2,7 +2,8 @@ import streamlit as st
 
 from poker_ai.evaluation import run_simulation, summarize_results
 from poker_ai.game_engine import PokerGame
-from poker_ai.visualization import inject_styles, render_table
+from poker_ai.kid_ui import render_kid_play_tab
+from poker_ai.visualization import inject_styles, render_last_hand_report, render_table
 
 
 def render_new_player_help(game: PokerGame) -> None:
@@ -55,22 +56,21 @@ def render_new_player_help(game: PokerGame) -> None:
 def main() -> None:
     st.set_page_config(page_title="Poker Game Simulator with Expectiminimax AI", layout="wide")
     inject_styles()
-    st.markdown(
-        "### Poker Game Simulator with **Expectiminimax AI**",
-    )
+    st.markdown("### Poker Game Simulator with **Expectiminimax AI**")
 
-    tab_play, tab_sim = st.tabs(["Play Game", "Simulation & Evaluation"])
+    if "game" not in st.session_state:
+        st.session_state.game = PokerGame(num_players=2)
+    game: PokerGame = st.session_state.game
+
+    tab_play, tab_kid, tab_sim = st.tabs(["Play Game", "Kid Play 🎈", "Simulation & Evaluation"])
 
     with tab_play:
-        if "game" not in st.session_state:
-            st.session_state.game = PokerGame(num_players=2)
-
-        game: PokerGame = st.session_state.game
 
         col_left, col_right = st.columns([3, 2])
 
         with col_left:
             render_table(game)
+            render_last_hand_report(game)
 
         with col_right:
             render_new_player_help(game)
@@ -101,17 +101,80 @@ def main() -> None:
             else:
                 st.write("_Play a hand to see analysis._")
 
+    with tab_kid:
+        render_kid_play_tab(game)
+
     with tab_sim:
         st.subheader("Automated Simulation")
         num_hands = st.slider("Number of hands", min_value=50, max_value=1000, value=200, step=50)
         depth = st.slider("AI search depth (simulation)", min_value=1, max_value=4, value=2, step=1)
         samples = st.slider("Monte Carlo samples (simulation)", min_value=16, max_value=256, value=64, step=16)
+        compare_modes = st.checkbox("Compare with normal logic (side by side)", value=False)
         if st.button("Run simulation"):
-            df = run_simulation(num_hands=num_hands, max_depth=depth, num_samples=samples)
-            st.session_state.sim_df = df
+            if compare_modes:
+                df_ai = run_simulation(
+                    num_hands=num_hands,
+                    max_depth=depth,
+                    num_samples=samples,
+                    mode="expectiminimax",
+                )
+                df_normal = run_simulation(
+                    num_hands=num_hands,
+                    max_depth=depth,
+                    num_samples=samples,
+                    mode="normal",
+                )
+                st.session_state.sim_compare = {"expectiminimax": df_ai, "normal": df_normal}
+                st.session_state.sim_df = None
+            else:
+                df = run_simulation(
+                    num_hands=num_hands,
+                    max_depth=depth,
+                    num_samples=samples,
+                    mode="expectiminimax",
+                )
+                st.session_state.sim_df = df
+                st.session_state.sim_compare = None
 
+        compare = st.session_state.get("sim_compare")
         df = st.session_state.get("sim_df")
-        if df is not None and not df.empty:
+        if compare:
+            df_ai = compare["expectiminimax"]
+            df_normal = compare["normal"]
+            if not df_ai.empty and not df_normal.empty:
+                s_ai = summarize_results(df_ai)
+                s_normal = summarize_results(df_normal)
+                st.markdown("#### Side-by-side output")
+                left, right = st.columns(2)
+                with left:
+                    st.markdown("**Expectiminimax**")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Win rate", f"{s_ai['win_rate']*100:.1f}%")
+                    c2.metric("Loss rate", f"{s_ai['loss_rate']*100:.1f}%")
+                    c3.metric("Avg profit / hand", f"{s_ai['avg_profit']:.1f}")
+                    c4.metric("Avg decision time (s)", f"{s_ai['avg_decision_time']:.3f}")
+                with right:
+                    st.markdown("**Normal logic**")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Win rate", f"{s_normal['win_rate']*100:.1f}%")
+                    c2.metric("Loss rate", f"{s_normal['loss_rate']*100:.1f}%")
+                    c3.metric("Avg profit / hand", f"{s_normal['avg_profit']:.1f}")
+                    c4.metric("Avg decision time (s)", f"{s_normal['avg_decision_time']:.3f}")
+
+                st.markdown("#### Delta (Expectiminimax - Normal)")
+                d1, d2, d3, d4 = st.columns(4)
+                d1.metric("Win rate delta", f"{(s_ai['win_rate'] - s_normal['win_rate']) * 100:.1f}%")
+                d2.metric("Loss rate delta", f"{(s_ai['loss_rate'] - s_normal['loss_rate']) * 100:.1f}%")
+                d3.metric("Profit delta", f"{s_ai['avg_profit'] - s_normal['avg_profit']:.1f}")
+                d4.metric("Decision time delta (s)", f"{s_ai['avg_decision_time'] - s_normal['avg_decision_time']:.3f}")
+
+                st.markdown("#### Cumulative profit comparison")
+                cmp_plot = df_ai[["hand", "ai_delta"]].copy()
+                cmp_plot["expectiminimax"] = cmp_plot["ai_delta"].cumsum()
+                cmp_plot["normal"] = df_normal["ai_delta"].cumsum()
+                st.line_chart(cmp_plot.set_index("hand")[["expectiminimax", "normal"]])
+
+        elif df is not None and not df.empty:
             summary = summarize_results(df)
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Win rate", f"{summary['win_rate']*100:.1f}%")
